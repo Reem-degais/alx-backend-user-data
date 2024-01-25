@@ -10,6 +10,9 @@ from sqlalchemy.orm.exc import NoResultFound
 from user import User
 
 
+logging.disable(logging.WARNING)
+
+
 def _hash_password(password: str) -> bytes:
     """Hashes a password.
     """
