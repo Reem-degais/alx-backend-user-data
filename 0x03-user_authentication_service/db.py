@@ -1,115 +1,128 @@
 #!/usr/bin/env python3
-"""DB module
 """
-import logging
-from typing import Dict
+Flask app
+"""
+from auth import Auth
+from flask import Flask, abort, jsonify, request, redirect, url_for
 
-from sqlalchemy import create_engine
-from sqlalchemy.exc import InvalidRequestError
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.orm.exc import NoResultFound
-from sqlalchemy.orm.session import Session
-
-from user import Base, User
-
-logging.disable(logging.WARNING)
+app = Flask(__name__)
+app.url_map.strict_slashes = False
+app.config["JSONIFY_PRETTYPRINT_REGULAR"] = True
+AUTH = Auth()
 
 
-class DB:
-    """DB class
+@app.route("/")
+def home() -> str:
+    """ Home endpoint
+        Return:
+            - Logout message JSON represented
     """
+    return jsonify({"message": "Bienvenue"})
 
-    def __init__(self) -> None:
-        """Initialize a new DB instance
-        """
-        self._engine = create_engine("sqlite:///a.db", echo=True)
-        Base.metadata.drop_all(self._engine)
-        Base.metadata.create_all(self._engine)
-        self.__session = None
 
-    @property
-    def _session(self) -> Session:
-        """Memoized session object
-        """
-        if self.__session is None:
-            DBSession = sessionmaker(bind=self._engine)
-            self.__session = DBSession()
-        return self.__session
+@app.route("/sessions", methods=["POST"])
+def login():
+    """ Login endpoint
+        Form fields:
+            - email
+            - password
+        Return:
+            - user email and login message JSON represented
+            - 401 if credential are invalid
+    """
+    email = request.form.get("email")
+    password = request.form.get("password")
+    if not AUTH.valid_login(email, password):
+        abort(401)
+    session_id = AUTH.create_session(email)
+    response = jsonify({"email": email, "message": "logged in"})
+    response.set_cookie("session_id", session_id)
+    return response
 
-    def add_user(self, email: str, hashed_password: str) -> User:
-        """Adds a new user to the db with the given email and hashed password.
 
-        Args:
-            email (str): The email address of the new user.
-            hashed_password (str): The hashed password of the new user.
+@app.route("/sessions", methods=["DELETE"])
+def logout():
+    """ Logout endpoint
+        Return:
+            - redirect to home page
+    """
+    session_id = request.cookies.get("session_id")
+    user = AUTH.get_user_from_session_id(session_id)
+    if not user:
+        abort(403)
+    AUTH.destroy_session(user.id)
+    return redirect(url_for("home"))
 
-        Returns:
-            User: A User object representing the new user.
-        """
-        # Create new user
-        new_user = User(email=email, hashed_password=hashed_password)
-        try:
-            self._session.add(new_user)
-            self._session.commit()
-        except Exception as e:
-            print(f"Error adding user to database: {e}")
-            self._session.rollback()
-            raise
-        return new_user
 
-    def find_user_by(self, **kwargs: Dict[str, str]) -> User:
-        """Find a user by specified attributes.
+@app.route("/users", methods=["POST"])
+def users():
+    """ New user signup endpoint
+        Form fields:
+            - email
+            - password
+    """
+    email = request.form.get("email")
+    password = request.form.get("password")
+    try:
+        AUTH.register_user(email, password)
+        return jsonify({"email": email, "message": "user created"})
+    except ValueError:
+        return jsonify({"message": "email already registered"}), 400
 
-        Raises:
-            error: NoResultFound: When no results are found.
-            error: InvalidRequestError: When invalid query arguments are passed
 
-        Returns:
-            User: First row found in the `users` table.
-        """
-        session = self._session
-        try:
-            user = session.query(User).filter_by(**kwargs).one()
-        except NoResultFound:
-            raise NoResultFound()
-        except InvalidRequestError:
-            raise InvalidRequestError()
-        # print("Type of user: {}".format(type(user)))
-        return user
+@app.route("/profile")
+def profile() -> str:
+    """ User profile endpoint
+        Return:
+            - user email JSON represented
+            - 403 if session_id is not linked to any user
+    """
+    session_id = request.cookies.get("session_id")
+    user = AUTH.get_user_from_session_id(session_id)
+    if not user:
+        abort(403)
+    return jsonify({"email": user.email})
 
-    def update_user(self, user_id: int, **kwargs) -> None:
-        """Updates a user's attributes by user ID and arbitrary keyword
-        arguments.
 
-        Args:
-            user_id (int): The ID of the user to update.
-            **kwargs: Keyword arguments representing the user's attributes to
-            update.
+@app.route("/reset_password", methods=["POST"])
+def get_reset_password_token() -> str:
+    """ Reset password token endpoint
+        Form fields:
+            - email
+        Return:
+            - email and reset token JSON represented
+            - 403 if email is not associated with any user
+    """
+    email = request.form.get("email")
+    try:
+        reset_token = AUTH.get_reset_password_token(email)
+    except ValueError:
+        abort(403)
 
-        Raises:
-            ValueError: If an invalid attribute is passed in kwargs.
+    return jsonify({"email": email, "reset_token": reset_token})
 
-        Returns:
-            None
-        """
-        try:
-            # Find the user with the given user ID
-            user = self.find_user_by(id=user_id)
-        except NoResultFound:
-            raise ValueError("User with id {} not found".format(user_id))
 
-        # Update user's attributes
-        for key, value in kwargs.items():
-            if not hasattr(user, key):
-                # Raise error if an argument that does not correspond to a user
-                # attribute is passed
-                raise ValueError("User has no attribute {}".format(key))
-            setattr(user, key, value)
+@app.route("/reset_password", methods=["PUT"])
+def update_password():
+    """ Password update endpoint
+        Form fields:
+            - email
+            - reset_token
+            - new_password
+        Return:
+            - user email and password update message JSON represented
+            - 403 if reset token is not provided or not linked to any user
+    """
+    email = request.form.get("email")
+    new_password = request.form.get("new_password")
+    reset_token = request.form.get("reset_token")
 
-        try:
-            # Commit changes to the database
-            self._session.commit()
-        except InvalidRequestError:
-            # Raise error if an invalid request is made
-            raise ValueError("Invalid request")
+    try:
+        AUTH.update_password(reset_token, new_password)
+    except ValueError:
+        abort(403)
+    return jsonify({"email": email, "message": "Password updated"})
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port="5000")
