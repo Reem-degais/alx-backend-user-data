@@ -25,6 +25,7 @@ elif auth_type == 'basic_auth':
 elif auth_type == 'session_auth':
     auth = SessionAuth()
 
+
 @app.errorhandler(401)
 def Unauthorized(error) -> str:
     """ Unauthorized handler
