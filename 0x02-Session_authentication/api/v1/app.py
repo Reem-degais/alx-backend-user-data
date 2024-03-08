@@ -63,11 +63,10 @@ def before_request() -> str:
     if auth.authorization_header(request) is None:
         abort(401)
 
-    current_user = auth.current_user(request)
     if current_user is None:
         abort(403)
 
-    request.current_user = current_user
+    request.current_user = auth.current_user(request)
 
 
 if __name__ == "__main__":
