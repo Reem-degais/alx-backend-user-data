@@ -46,6 +46,7 @@ class RedactingFormatter(logging.Formatter):
                                 message, self.SEPARATOR)
         return redacted
 
+
 def get_logger() -> logging.Logger:
     """
     Return a logging.Logger object
